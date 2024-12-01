@@ -50,7 +50,8 @@ $("#version").html(i18n.catCatch + " v" + chrome.runtime.getManifest().version);
 playerList = new Map();
 playerList.set("tips", { name: i18n.invokeProtocolTemplate, template: "" });
 playerList.set("default", { name: i18n.default + " / " + i18n.disable, template: "" });
-playerList.set("potplayer", { name: "PotPlayer", template: "potplayer://${url}" });
+playerList.set("potplayer", { name: "PotPlayer", template: "potplayer://${url} ${referer|exists:'/referer=\"*\"'}" });
+playerList.set("potplayerFix", { name: "PotPlayerFix", template: "potplayer:${url} ${referer|exists:'/referer=\"*\"'}" });
 playerList.set("mxPlayerAd", { name: "Android MX Player Free", template: "intent:${url}#Intent;package=com.mxtech.videoplayer.ad;end" });
 playerList.set("mxPlayerPro", { name: "Android MX Player Pro", template: "intent:${url}#Intent;package=com.mxtech.videoplayer.pro;end" });
 playerList.set("vlc", { name: "Android vlc", template: "intent:${url}#Intent;package=org.videolan.vlc;end" });
@@ -184,7 +185,7 @@ function testTag() {
         title: $("#title").val(),
     }
     const result = templates($("#testTextarea").val() ?? "", data);
-    const m3u8dl = 'm3u8dl://' + Base64.encode(result);
+    const m3u8dl = 'm3u8dl:' + (G.m3u8dl == 1 ? Base64.encode(result) : result);
     $("#tagTestResult").html(`${result}<br><br><a href="${m3u8dl}" class="test_url">${m3u8dl}</a>`);
 }
 $("#showTestTag").bind("click", function () {

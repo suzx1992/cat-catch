@@ -1,8 +1,10 @@
 // const CATCH_SEARCH_ONLY = true;
-(function () {
+(function __CAT_CATCH_CATCH_SCRIPT_V_2_5_6__() {
+    const _selfString = __CAT_CATCH_CATCH_SCRIPT_V_2_5_6__.toString();
+    const isRunningInWorker = typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope;
     const CATCH_SEARCH_DEBUG = false;
     // 防止 console.log 被劫持
-    if (CATCH_SEARCH_DEBUG && console.log.toString() != 'function log() { [native code] }') {
+    if (!isRunningInWorker && CATCH_SEARCH_DEBUG && console.log.toString() != 'function log() { [native code] }') {
         const newIframe = top.document.createElement("iframe");
         newIframe.style.width = 0;
         newIframe.style.height = 0;
@@ -11,11 +13,54 @@
         window.console.log = newIframe.contentWindow.catCatchLOG;
     }
     // 防止 window.postMessage 被劫持
-    const _postMessage = window.postMessage;
+    const _postMessage = (isRunningInWorker ? self : window).postMessage;
 
     console.log("start search.js");
     const filter = new Set();
     const reKeyURL = /URI="(.*)"/;
+
+    // Worker
+    if (!isRunningInWorker) {
+        // const _Blob = Blob;
+        // const _selfString = __CAT_CATCH_CATCH_SCRIPT_V_2_5_6__.toString();
+        // Blob = function (blobParts, options) {
+        //     if (options?.type.endsWith("/javascript")) {
+        //         blobParts.unshift(`(${_selfString})();`);
+        //     }
+        //     return new _Blob(blobParts, options);
+        // };
+        // const _Worker = Worker;
+        // window.Worker = function (scriptURL, options) {
+        //     const newWorker = new _Worker(scriptURL, options);
+        //     newWorker.onmessage = function (event) {
+        //         if (event.data?.action == "catCatchAddKey") {
+        //             postData(event.data);
+        //         }
+        //     }
+        //     return newWorker;
+        // }
+
+        const _Worker = Worker;
+        window.Worker = function (scriptURL, options) {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', scriptURL, false);
+            xhr.send();
+            if (xhr.status === 200) {
+                const blob = new Blob([`(${_selfString})();`, xhr.response], { type: 'text/javascript' });
+                const newWorker = new _Worker(URL.createObjectURL(blob), options);
+                newWorker.onmessage = function (event) {
+                    if (event.data?.action == "catCatchAddKey" || event.data?.action == "catCatchAddMedia") {
+                        postData(event.data);
+                    }
+                }
+                return newWorker;
+            }
+            return new _Worker(scriptURL, options);
+        }
+        window.Worker.toString = function () {
+            return _Worker.toString();
+        }
+    }
 
     // JSON.parse
     const _JSONparse = JSON.parse;
@@ -153,8 +198,8 @@
     }
 
     // fetch
-    const _fetch = window.fetch;
-    window.fetch = async function (input, init) {
+    const _fetch = fetch;
+    fetch = async function (input, init) {
         const response = await _fetch.apply(this, arguments);
         const clone = response.clone();
         CATCH_SEARCH_DEBUG && console.log(response);
@@ -190,7 +235,7 @@
             });
         return clone;
     }
-    window.fetch.toString = function () {
+    fetch.toString = function () {
         return _fetch.toString();
     }
 
@@ -228,8 +273,8 @@
     }
 
     // window.btoa / window.atob
-    const _btoa = window.btoa;
-    window.btoa = function (data) {
+    const _btoa = btoa;
+    btoa = function (data) {
         const base64 = _btoa.apply(this, arguments);
         CATCH_SEARCH_DEBUG && console.log(base64, data, base64.length);
         if (base64.length == 24 && base64.substring(22, 24) == "==") {
@@ -240,11 +285,11 @@
         }
         return base64;
     }
-    window.btoa.toString = function () {
+    btoa.toString = function () {
         return _btoa.toString();
     }
-    const _atob = window.atob;
-    window.atob = function (base64) {
+    const _atob = atob;
+    atob = function (base64) {
         const data = _atob.apply(this, arguments);
         CATCH_SEARCH_DEBUG && console.log(base64, data, base64.length);
         if (base64.length == 24 && base64.substring(22, 24) == "==") {
@@ -258,7 +303,7 @@
         }
         return data;
     }
-    window.atob.toString = function () {
+    atob.toString = function () {
         return _atob.toString();
     }
 
@@ -314,7 +359,7 @@
     });
 
     // escape
-    const _escape = window.escape;
+    const _escape = escape;
     escape = function (str) {
         if (str?.length && str.length == 24 && str.substring(22, 24) == "==") {
             postData({ action: "catCatchAddKey", key: str, href: location.href, ext: "base64Key" });
@@ -325,6 +370,24 @@
         return _escape.toString();
     }
 
+    const uint32ArrayToUint8Array_ = (array) => {
+        const newArray = new Uint8Array(16);
+        for (let i = 0; i < 4; i++) {
+            newArray[i * 4] = (array[i] >> 24) & 0xff;
+            newArray[i * 4 + 1] = (array[i] >> 16) & 0xff;
+            newArray[i * 4 + 2] = (array[i] >> 8) & 0xff;
+            newArray[i * 4 + 3] = array[i] & 0xff;
+        }
+        return newArray;
+    }
+    const uint16ArrayToUint8Array_ = (array) => {
+        const newArray = new Uint8Array(16);
+        for (let i = 0; i < 8; i++) {
+            newArray[i * 2] = (array[i] >> 8) & 0xff;
+            newArray[i * 2 + 1] = array[i] & 0xff;
+        }
+        return newArray;
+    }
     // findTypedArray
     const findTypedArray = (target, args) => {
         const isArray = Array.isArray(args[0]) && args[0].length === 16;
@@ -333,27 +396,33 @@
         if (isArray || isArrayBuffer) {
             postData({ action: "catCatchAddKey", key: args[0], href: location.href, ext: "key" });
         } else if (instance.buffer.byteLength === 16) {
-            postData({ action: "catCatchAddKey", key: instance.buffer, href: location.href, ext: "key" });
+            if (target.name === 'Uint32Array') {
+                postData({ action: "catCatchAddKey", key: uint32ArrayToUint8Array_(instance).buffer, href: location.href, ext: "key" });
+            } else if (target.name === 'Uint16Array') {
+                postData({ action: "catCatchAddKey", key: uint16ArrayToUint8Array_(instance).buffer, href: location.href, ext: "key" });
+            } else {
+                postData({ action: "catCatchAddKey", key: instance.buffer, href: location.href, ext: "key" });
+            }
         }
         return instance;
     }
     // Uint8Array
     const _Uint8Array = Uint8Array;
-    window.Uint8Array = new Proxy(_Uint8Array, {
+    Uint8Array = new Proxy(_Uint8Array, {
         construct(target, args) {
             return findTypedArray(target, args);
         }
     });
     // Uint16Array
     const _Uint16Array = Uint16Array;
-    window.Uint16Array = new Proxy(_Uint16Array, {
+    Uint16Array = new Proxy(_Uint16Array, {
         construct(target, args) {
             return findTypedArray(target, args);
         }
     });
     // Uint32Array
     const _Uint32Array = Uint32Array;
-    window.Uint32Array = new Proxy(_Uint32Array, {
+    Uint32Array = new Proxy(_Uint32Array, {
         construct(target, args) {
             return findTypedArray(target, args);
         }
@@ -455,15 +524,14 @@
         return text;
     }
     function postData(data) {
-        if (data.action == "catCatchAddKey") {
-            if (data.key == "AAAAAAAAAAAAAAAAAAAAAA==") { return; }
-            if (data.key instanceof ArrayBuffer && isArrayBufferAllZero(data.key)) { return; }
-        }
         let value = data.url ? data.url : data.key;
         if (value instanceof ArrayBuffer || value instanceof Array) {
             if (value.byteLength == 0) { return; }
             data.key = ArrayToBase64(value);
             value = data.key;
+        }
+        if (data.action == "catCatchAddKey" && data.key.startsWith("AAAAAAAAAAAAAAAAAAAA")) {
+            return;
         }
         if (filter.has(value)) { return false; }
         filter.add(value);
@@ -497,14 +565,5 @@
             }
         }
         return _buffer.buffer;
-    }
-    function isArrayBufferAllZero(buffer) {
-        let view = new _Uint8Array(buffer);
-        for (let i = 0; i < view.length; i++) {
-            if (view[i] !== 0) {
-                return false;
-            }
-        }
-        return true;
     }
 })();

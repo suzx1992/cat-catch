@@ -79,6 +79,7 @@ let downId = 0; // chrome下载api 回调id
 /* 以下参数 新下载器已弃用 */
 let stopDownload = false; // 停止下载flag
 let downDuration = 0; // 下载媒体得时长
+let downSize = 0;
 let downCurrentTs = 0;    // 当前进度
 let downTotalTs = 0;  // 需要下载的文件数量
 let tsBuffer = []; // ts内容缓存
@@ -214,12 +215,7 @@ hls.on(Hls.Events.MANIFEST_LOADED, function (event, data) {
 hls.on(Hls.Events.MANIFEST_PARSED, function (event, data) {
     // console.log(data);
     $("#m3u8").show(); $("#loading").hide();
-    let more = false;
-
-    // 多条资源
-    if (data.levels.length + data.audioTracks.length + data.subtitleTracks.length >= 2) {
-        more = true;
-    }
+    const more = (data.levels.length + data.audioTracks.length + data.subtitleTracks.length >= 2);
 
     // 多个视频
     if (more && data.levels.length) {
@@ -229,12 +225,16 @@ hls.on(Hls.Events.MANIFEST_PARSED, function (event, data) {
             const html = $(`<div class="block">
                     <div>${item.attrs.RESOLUTION ? i18n.resolution + ":" + item.attrs.RESOLUTION : ""}${item.attrs.BANDWIDTH ? " | " + i18n.bitrate + ":" + (parseInt(item.attrs.BANDWIDTH / 1000) + " Kbps") : ""}</div>
                     <a href="${url}">${name}</a>
+                    <button id="parser" type="button">${i18n.parser}</button>
                     <button class="sendFfmpeg" type="button">${i18n.sendFfmpeg}</button>
                 </div>`);
             html.find(".sendFfmpeg").click(function () {
                 let newUrl = url + `&autoDown=1`;
                 newUrl += `&ffmpeg=addFile`;
                 chrome.tabs.create({ url: newUrl, index: currentIndex + 1, active: false });
+            });
+            html.find("#parser").click(function () {
+                chrome.tabs.update({ url: url });
             });
             $("#next_m3u8").append(html);
         }
@@ -257,12 +257,16 @@ hls.on(Hls.Events.MANIFEST_PARSED, function (event, data) {
             const html = $(`<div class="block">
                     <div>${item.name ? item.name : ""} | ${item.lang ? item.lang : ""} | ${item.groupId ? item.groupId : ""}</div>
                     <a href="${url}">${name}</a>
+                    <button id="parser" type="button">${i18n.parser}</button>
                     <button class="sendFfmpeg" type="button">${i18n.sendFfmpeg}</button>
                 </div>`);
             html.find(".sendFfmpeg").click(function () {
                 let newUrl = url + `&autoDown=1`;
                 newUrl += `&ffmpeg=addFile`;
                 chrome.tabs.create({ url: newUrl, index: currentIndex + 1, active: false });
+            });
+            html.find("#parser").click(function () {
+                chrome.tabs.update({ url: url });
             });
             $("#next_audio").append(html);
         }
@@ -323,7 +327,10 @@ hls.on(Hls.Events.LEVEL_LOADED, function (event, data) {
 // 监听 ERROR m3u8解析错误
 hls.on(Hls.Events.ERROR, function (event, data) {
     autoDown && highlight();
-    console.log(data.error);
+    console.log(data);
+    if (data.details == "bufferStalledError") {
+        hls.stopLoad();
+    }
     if (data.type == "mediaError" && data.details == "fragParsingError") {
         if (data.error.message == "No ADTS header found in AAC PES") {
             $("#tips").append("<b>" + i18n.ADTSerror + "</b>");
@@ -576,8 +583,8 @@ let progressTimer = setInterval(() => {
 // 监听下载事件 修改提示
 chrome.downloads.onChanged.addListener(function (downloadDelta) {
     if (!downloadDelta.state) { return; }
-    if (downloadDelta.state.current == "complete") {
-        downId != 0 && $progress.html(i18n.SavePrompt);
+    if (downloadDelta.state.current == "complete" && downId == downloadDelta.id) {
+        $progress.html(i18n.SavePrompt);
         $("#autoClose").prop("checked") && window.close();
     }
 });
@@ -657,7 +664,7 @@ $("#m3u8DL").click(function () {
     const m3u8dlArg = getM3u8DlArg();
     $m3u8dlArg.val(m3u8dlArg);
     navigator.clipboard.writeText(m3u8dlArg);
-    const m3u8dl = 'm3u8dl://' + (G.m3u8dl == 1 ? Base64.encode(m3u8dlArg) : m3u8dlArg);
+    const m3u8dl = 'm3u8dl:' + (G.m3u8dl == 1 ? Base64.encode(m3u8dlArg) : m3u8dlArg);
     if (m3u8dl.length >= 2046) {
         alert(i18n.M3U8DLparameterLong);
     }
@@ -1178,7 +1185,7 @@ function downloadNew(start = 0, end = _fragments.length) {
         }
         // $(`#downItem${fragment.index}`).remove();
         $progress.html(`${down.success}/${down.total}`);
-        $fileSize.html(i18n.downloaded + ":" + byteToSize(down.bufferize));
+        $fileSize.html(i18n.downloaded + ":" + byteToSize(down.buffersize));
         $fileDuration.html(i18n.downloadedVideoLength + ":" + secToTime(down.duration));
     });
     // 全部下载完成
@@ -1188,6 +1195,13 @@ function downloadNew(start = 0, end = _fragments.length) {
             fileStream.close();
             fileStream = undefined;
         } else {
+            if ($("#ffmpeg").prop("checked") || _ffmpeg || isSendFfmpeg) {
+                chrome.runtime.sendMessage({
+                    Message: "catCatchFFmpeg",
+                    action: "openFFmpeg",
+                    extra: i18n.waitingForMedia
+                });
+            }
             mergeTsNew(down);
         }
         transmuxer?.off && transmuxer.off('data');
@@ -1321,20 +1335,22 @@ function mergeTsNew(down) {
     ext = down.transcode ? "mp4" : ext;
 
     let fileName = "";
-    if ($('#customFilename').val()) {
-        fileName = $('#customFilename').val().trim();
+    const customFilename = $('#customFilename').val().trim();
+    if (customFilename) {
+        fileName = customFilename;
     } else if (_fileName) {
         fileName = _fileName;
     } else {
         fileName = GetFileName(_m3u8Url);
     }
     // 删除目录
-    fileName = fileName.split("/");
-    fileName = fileName.length > 1 ? fileName.pop() : fileName.join("");
+    // fileName = fileName.split("/");
+    // fileName = fileName.length > 1 ? fileName.pop() : fileName.join("");
     // 删除后缀
+    let originalExt = null;
     if (/\.[a-zA-Z0-9]{1,4}$/.test(fileName)) {
         fileName = fileName.split(".");
-        fileName.pop();
+        originalExt = fileName.pop();
         fileName = fileName.join(".");
     }
     // 发送到ffmpeg
@@ -1345,7 +1361,9 @@ function mergeTsNew(down) {
             down.destroy();
             return;
         }
-        if (ext != "mp4" && ext != "mp3") {
+        if (customFilename && originalExt) {
+            fileName += "." + originalExt;
+        } else if (ext != "mp4" && ext != "mp3") {
             fileName = fileName + ".mp4";
         } else {
             fileName = fileName + "." + ext;
@@ -1361,7 +1379,7 @@ function mergeTsNew(down) {
         const data = {
             Message: "catCatchFFmpeg",
             action: action,
-            files: [{ data: URL.createObjectURL(fileBlob), name: `memory${new Date().getTime()}.${ext}` }],
+            files: [{ data: G.isFirefox ? fileBlob : URL.createObjectURL(fileBlob), name: `memory${new Date().getTime()}.${ext}` }],
             title: fileName,
             output: fileName,
             name: "memory" + new Date().getTime() + "." + ext,
@@ -1392,12 +1410,17 @@ function mergeTsNew(down) {
 function apiDownload(fileBlob, fileName, ext) {
     chrome.downloads.download({
         url: URL.createObjectURL(fileBlob),
-        filename: fileName = fileName + "." + ext,
+        filename: fileName + "." + ext,
         saveAs: $("#saveAs").prop("checked")
     }, function (downloadId) {
-        downId = downloadId;
-        $(".openDir").show();
-        buttonState("#mergeTs", true);
+        if (downloadId) {
+            downId = downloadId;
+            $(".openDir").show();
+            buttonState("#mergeTs", true);
+        } else if (chrome.runtime?.lastError?.message && chrome.runtime.lastError.message == 'Invalid filename') {
+            apiDownload(fileBlob, stringModify(fileName), ext);
+            return;
+        }
     });
 }
 
@@ -1430,7 +1453,7 @@ function mergeTs() {
             chrome.runtime.sendMessage({
                 Message: "catCatchFFmpeg",
                 action: $("#onlyAudio").prop("checked") ? "onlyAudio" : "transcode",
-                media: [{ data: URL.createObjectURL(fileBlob), name: `memory${new Date().getTime()}.${ext}` }],
+                media: [{ data: G.isFirefox ? fileBlob : URL.createObjectURL(fileBlob), name: `memory${new Date().getTime()}.${ext}` }],
                 title: `${GetFileName(_m3u8Url)}`,
                 name: "memory" + new Date().getTime() + "." + ext
             });

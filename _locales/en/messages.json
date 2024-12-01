@@ -126,7 +126,7 @@
     "message": "Select All"
   },
   "invertSelection": {
-    "message": "Invert Selection"
+    "message": "Toggle"
   },
   "filter": {
     "message": "Filter"
@@ -704,6 +704,14 @@
       }
     }
   },
+  "fileTooLargeStream": {
+    "message": "File larger than $size$, enable stream download?",
+    "placeholders": {
+      "size": {
+        "content": "$1"
+      }
+    }
+  },
   "formatConversionError": {
     "message": "Format Conversion Error"
   },
@@ -815,5 +823,11 @@
   },
   "withinChina": {
     "message": "Within China"
+  },
+  "dataFetchFailed": {
+    "message": "Data fetch failed"
+  },
+  "confirmParameters": {
+    "message": "Confirm Parameters"
   }
 }

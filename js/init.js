@@ -79,7 +79,8 @@ G.OptionLists = {
     ShowWebIco: true,
     MobileUserAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1",
     m3u8dl: 0,
-    m3u8dlArg: `"\${url}" --workDir "%USERPROFILE%\\Downloads\\m3u8dl" --saveName "\${title}_\${now}" --enableDelAfterDone \${referer|exists:'--headers "Referer:*"'}`,
+    m3u8dlArg: `"\${url}" --save-dir "%USERPROFILE%\\Downloads\\m3u8dl" --save-name "\${title}_\${now}" \${referer|exists:'-H "Referer:*"'} \${cookie|exists:'-H "Cookie:*"'} --no-log`,
+    m3u8dlConfirm: false,
     playbackRate: 2,
     copyM3U8: "${url}",
     copyMPD: "${url}",
@@ -109,7 +110,8 @@ G.OptionLists = {
     popupTop: 0,
     popupLeft: 0,
     invoke: false,
-    invokeText: `m3u8dlre://"\${url}" --save-dir "%USERPROFILE%\\Downloads" --del-after-done --save-name "\${title}_\${now}" --auto-select \${referer|exists:'-H "Referer: *"'}`,
+    invokeText: `m3u8dlre:"\${url}" --save-dir "%USERPROFILE%\\Downloads" --del-after-done --save-name "\${title}_\${now}" --auto-select \${referer|exists:'-H "Referer: *"'}`,
+    invokeConfirm: false,
     // m3u8解析器默认参数
     M3u8Thread: 6,
     M3u8Mp4: false,
@@ -120,6 +122,8 @@ G.OptionLists = {
     M3u8AutoClose: false,
     // 第三方服务地址
     onlineServiceAddress: 0,
+    // 新 猫抓下载器
+    testDownloader: true
 };
 // 本地储存的配置
 G.LocalVar = {
@@ -129,16 +133,9 @@ G.LocalVar = {
 };
 
 // 102版本以上 非Firefox 开启更多功能
-G.isFirefox = false;
-G.version = 93;
-if (navigator.userAgent.includes("Chrome/")) {
-    const version = navigator.userAgent.match(/Chrome\/([\d]+)/);
-    if (version && version[1]) {
-        G.version = parseInt(version[1]);
-    }
-} else if (navigator.userAgent.includes("Firefox/")) {
-    G.isFirefox = true;
-}
+G.isFirefox = (typeof browser == "object");
+G.version = navigator.userAgent.match(/(Chrome|Firefox)\/([\d]+)/);
+G.version = G.version && G.version[2] ? parseInt(G.version[2]) : 93;
 
 // 脚本列表
 G.scriptList = new Map();
@@ -151,6 +148,7 @@ G.scriptList.set("webrtc.js", { key: "webrtc", refresh: true, allFrames: true, w
 // ffmpeg
 G.ffmpegConfig = {
     tab: 0,
+    cacheData: [],
     version: 1,
     get url() {
         return G.onlineServiceAddress == 0 ? "https://ffmpeg.bmmmd.com/" : "https://ffmpeg2.bmmmd.com/";
@@ -166,6 +164,7 @@ G.streamSaverConfig = {
 // 正则预编译
 const reFilename = /filename="?([^"]+)"?/;
 const reStringModify = /[<>:"\/\\|?*~]/g;
+const reFilterFileName = /[<>:"|?*~]/g;
 const reTemplates = /\${([^}|]+)(?:\|([^}]+))?}/g;
 
 // 防抖
@@ -215,7 +214,7 @@ function InitOptions() {
             items.copyOther = items.copyOther.replaceAll('$url$', '${url}').replaceAll('$referer$', '${referer}').replaceAll('$title$', '${title}');
             chrome.storage.sync.set({ copyOther: items.copyOther });
         }
-        if(typeof items.m3u8dl == 'boolean'){
+        if (typeof items.m3u8dl == 'boolean') {
             items.m3u8dl = items.m3u8dl ? 1 : 0;
             chrome.storage.sync.set({ m3u8dl: items.m3u8dl });
         }
@@ -223,7 +222,7 @@ function InitOptions() {
         G = { ...items, ...G };
 
         const icon = { path: G.enable ? "/img/icon.png" : "/img/icon-disable.png" };
-        G.isFirefox ? browser.browserAction.setIcon(icon) : chrome.action.setIcon(icon);
+        chrome.action.setIcon(icon);
 
         G.initSyncComplete = true;
     });
@@ -271,9 +270,9 @@ chrome.storage.onChanged.addListener(function (changes, namespace) {
 chrome.runtime.onInstalled.addListener(function (details) {
     if (details.reason == "update") {
         chrome.storage.local.clear(function () {
-            if(chrome.storage.session){
+            if (chrome.storage.session) {
                 chrome.storage.session.clear(InitOptions);
-            }else{
+            } else {
                 InitOptions();
             }
         });
@@ -312,12 +311,18 @@ function clearRedundant() {
         chrome.declarativeNetRequest.getSessionRules(function (rules) {
             let mobileFlag = false;
             for (let item of rules) {
-                if (!allTabId.has(item.id)) {
-                    mobileFlag = true;
-                    G.featMobileTabId.delete(item.id);
-                    chrome.declarativeNetRequest.updateSessionRules({
-                        removeRuleIds: [item.id]
-                    });
+                if (item.condition.tabIds) {
+                    // 如果tabIds列表都不存在 则删除该条规则
+                    if (!item.condition.tabIds.some(id => allTabId.has(id))) {
+                        mobileFlag = true;
+                        item.condition.tabIds.forEach(id => G.featMobileTabId.delete(id));
+                        chrome.declarativeNetRequest.updateSessionRules({
+                            removeRuleIds: [item.id]
+                        });
+                    }
+                } else if (item.id == 1) {
+                    // 清理预览视频增加的请求头
+                    chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [1] });
                 }
             }
             mobileFlag && (chrome.storage.session ?? chrome.storage.local).set({ featMobileTabId: Array.from(G.featMobileTabId) });
@@ -334,27 +339,37 @@ function clearRedundant() {
     });
     // G.referer.clear();
     // G.blackList.clear();
+    // G.temp.clear();
 }
 
 // 替换掉不允许的文件名称字符
 function stringModify(str, text) {
     if (!str) { return str; }
-    reStringModify.lastIndex = 0;
+    str = filterFileName(str, text);
+    return str.replaceAll("\\", "&bsol;").replaceAll("/", "&sol;");
+}
+function filterFileName(str, text) {
+    if (!str) { return str; }
+    reFilterFileName.lastIndex = 0;
     str = str.replaceAll(/\u200B/g, "").replaceAll(/\u200C/g, "").replaceAll(/\u200D/g, "");
-    return str.replace(reStringModify, function (match) {
+    str = str.replace(reFilterFileName, function (match) {
         return text || {
             '<': '&lt;',
             '>': '&gt;',
             ':': '&colon;',
             '"': '&quot;',
-            '/': '&sol;',
-            '\\': '&bsol;',
             '|': '&vert;',
             '?': '&quest;',
             '*': '&ast;',
             '~': '_'
         }[match];
     });
+
+    // 如果最后一位是"." chrome.download 无法下载
+    if (str.endsWith(".")) {
+        str = str + "catCatch";
+    }
+    return str;
 }
 
 // 发送到本地接口

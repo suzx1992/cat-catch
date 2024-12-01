@@ -17,10 +17,11 @@ class Downloader {
         this.state = 'waiting';          // 下载器状态 waiting running done abort
         this.success = 0;                // 成功下载数量
         this.errorList = new Set();      // 下载错误的列表
-        this.bufferize = 0;              // 已下载buffer大小
+        this.buffersize = 0;             // 已下载buffer大小
         this.duration = 0;               // 已下载时长
         this.pushIndex = 0;              // 推送顺序下载索引
         this.controller = [];            // 储存中断控制器
+        this.running = 0;
     }
     /**
      * 设置监听
@@ -66,7 +67,7 @@ class Downloader {
      */
     stop(index = undefined) {
         if (index !== undefined) {
-            this.controller[index].abort();
+            this.controller[index] && this.controller[index].abort();
             return;
         }
         this.controller.forEach(controller => { controller.abort() });
@@ -168,6 +169,14 @@ class Downloader {
         return "";
     }
     /**
+     * 添加一条新资源
+     * @param {Object} fragment
+     */
+    push(fragment) {
+        fragment.index = this.fragments.length;
+        this.fragments.push(fragment);
+    }
+    /**
      * 下载器 使用fetch下载文件
      * @param {object} fragment 重新下载的对象
      */
@@ -179,34 +188,48 @@ class Downloader {
         // 非直接下载对象 从this.fragments获取下一条资源 若不存在跳出
         if (!directDownload && !this.fragments[this.index]) { return; }
 
+        // fragment是数字 直接从this.fragments获取
+        if (typeof fragment === 'number') {
+            fragment = this.fragments[fragment];
+        }
+
         // 不存在下载对象 从提取fragments
         fragment ??= this.fragments[this.index++];
         this.state = 'running';
+        this.running++;
+
+        // 资源已下载 跳过
+        // if (this.buffer[fragment.index]) { return; }
 
         // 停止下载控制器
         const controller = new AbortController();
         this.controller[fragment.index] = controller;
+        const options = { signal: controller.signal };
 
         // 下载前触发事件
-        this.emit('start', fragment);
+        this.emit('start', fragment, options);
 
         // 开始下载
-        fetch(fragment.url, { signal: controller.signal })
+        fetch(fragment.url, options)
             .then(response => {
                 if (!response.ok) {
                     throw new Error(response.status);
                 }
                 const reader = response.body.getReader();
                 const contentLength = parseInt(response.headers.get('content-length')) || 0;
+                fragment.contentType = response.headers.get('content-type') ?? 'null';
                 let receivedLength = 0;
                 const chunks = [];
                 const pump = async () => {
                     while (true) {
                         const { value, done } = await reader.read();
                         if (done) { break; }
-                        chunks.push(value);
+
+                        // 流式下载
+                        fragment.fileStream ? fragment.fileStream.write(new Uint8Array(value)) : chunks.push(value);
+
                         receivedLength += value.length;
-                        this.emit('itemProgress', fragment, false, receivedLength, contentLength);
+                        this.emit('itemProgress', fragment, false, receivedLength, contentLength, value);
                     }
                     const allChunks = new Uint8Array(receivedLength);
                     let position = 0;
@@ -232,10 +255,11 @@ class Downloader {
             .then(buffer => {
                 // 储存解密/转码后的buffer
                 this.buffer[fragment.index] = buffer;
+
                 // 成功数+1 累计buffer大小和视频时长
                 this.success++;
-                this.bufferize += buffer.byteLength;
-                this.duration += fragment.duration;
+                this.buffersize += buffer.byteLength;
+                this.duration += fragment.duration ?? 0;
 
                 // 下载对象来自错误列表 从错误列表内删除
                 this.errorList.has(fragment) && this.errorList.delete(fragment);
@@ -261,6 +285,7 @@ class Downloader {
                 // 储存下载错误切片
                 !this.errorList.has(fragment) && this.errorList.add(fragment);
             }).finally(() => {
+                this.running--;
                 // 下载下一个切片
                 if (!directDownload && this.index < this.fragments.length) {
                     this.downloader();

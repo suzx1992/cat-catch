@@ -206,7 +206,7 @@ function findMedia(data, isRegex = false, filter = false, timer = false) {
             return;
         }
         // 发送到popup 并检查自动下载
-        chrome.runtime.sendMessage(info, function () {
+        chrome.runtime.sendMessage({ Message: "popupAddData", data: info }, function () {
             if (G.featAutoDownTabId.size > 0 && G.featAutoDownTabId.has(info.tabId)) {
                 const downDir = info.title == "NULL" ? "CatCatch/" : stringModify(info.title) + "/";
                 chrome.downloads.download({
@@ -214,11 +214,13 @@ function findMedia(data, isRegex = false, filter = false, timer = false) {
                     filename: downDir + info.name
                 });
             }
-            if (G.send2local) {
-                try { send2local("catch", { ...info, requestHeaders: data.allRequestHeaders }, info.tabId); } catch (e) { console.log(e); }
-            }
             if (chrome.runtime.lastError) { return; }
         });
+
+        // 数据发送
+        if (G.send2local) {
+            try { send2local("catch", { ...info, requestHeaders: data.allRequestHeaders }, info.tabId); } catch (e) { console.log(e); }
+        }
 
         // 储存数据
         cacheData[info.tabId] ??= [];
@@ -289,6 +291,24 @@ chrome.runtime.onMessage.addListener(function (Message, sender, sendResponse) {
         return true;
     }
     Message.tabId = Message.tabId ?? G.tabId;
+    if (Message.Message == "getData" && Message.requestId) {
+        // 判断Message.requestId是否数组
+        if (!Array.isArray(Message.requestId)) {
+            Message.requestId = [Message.requestId];
+        }
+        const response = [];
+        if (Message.requestId.length) {
+            for (let item in cacheData) {
+                for (let data of cacheData[item]) {
+                    if (Message.requestId.includes(data.requestId)) {
+                        response.push(data);
+                    }
+                }
+            }
+        }
+        sendResponse(response.length ? response : "error");
+        return true;
+    }
     if (Message.Message == "getData") {
         sendResponse(cacheData[Message.tabId]);
         return true;
@@ -422,11 +442,16 @@ chrome.runtime.onMessage.addListener(function (Message, sender, sendResponse) {
                 chrome.tabs.create({ url: G.ffmpegConfig.url, active: Message.active ?? true }, function (tab) {
                     if (chrome.runtime.lastError) { return; }
                     G.ffmpegConfig.tab = tab.id;
-                    G.ffmpegConfig.data = data;
+                    G.ffmpegConfig.cacheData.push(data);
                 });
                 return true;
             }
-            chrome.tabs.sendMessage(tabs[0].id, data);
+            if (tabs[0].status == "complete") {
+                chrome.tabs.sendMessage(tabs[0].id, data);
+            } else {
+                G.ffmpegConfig.tab = tabs[0].id;
+                G.ffmpegConfig.cacheData.push(data);
+            }
         });
         sendResponse("ok");
         return true;
@@ -437,8 +462,6 @@ chrome.runtime.onMessage.addListener(function (Message, sender, sendResponse) {
         sendResponse("ok");
         return true;
     }
-    sendResponse("Error");
-    return true;
 });
 
 // 选定标签 更新G.tabId
@@ -558,8 +581,10 @@ chrome.commands.onCommand.addListener(function (command) {
 chrome.webNavigation.onCompleted.addListener(function (details) {
     if (G.ffmpegConfig.tab && details.tabId == G.ffmpegConfig.tab) {
         setTimeout(() => {
-            chrome.tabs.sendMessage(details.tabId, G.ffmpegConfig.data);
-            G.ffmpegConfig.data = undefined;
+            G.ffmpegConfig.cacheData.forEach(data => {
+                chrome.tabs.sendMessage(details.tabId, data);
+            });
+            G.ffmpegConfig.cacheData = [];
             G.ffmpegConfig.tab = 0;
         }, 500);
     }
@@ -616,11 +641,13 @@ function getRequestHeaders(data) {
     for (let item of data.allRequestHeaders) {
         item.name = item.name.toLowerCase();
         if (item.name == "referer") {
-            header.referer = item.value.toLowerCase();
+            header.referer = item.value;
         } else if (item.name == "origin") {
-            header.origin = item.value.toLowerCase();
+            header.origin = item.value;
         } else if (item.name == "cookie") {
-            header.cookie = item.value.toLowerCase();
+            header.cookie = item.value;
+        } else if (item.name == "authorization") {
+            header.authorization = item.value;
         }
     }
     if (Object.keys(header).length) {

@@ -41,25 +41,35 @@ function isEmpty(obj) {
 
 // 修改请求头
 function setRequestHeaders(data = {}, callback = undefined) {
+    chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [1] });
     chrome.tabs.getCurrent(function (tabs) {
         const rules = { removeRuleIds: [tabs ? tabs.id : 1] };
         if (Object.keys(data).length) {
-            const requestHeaders = Object.keys(data).map(key => ({ header: key, operation: "set", value: data[key] }));
             rules.addRules = [{
                 "id": tabs ? tabs.id : 1,
+                "priority": tabs ? tabs.id : 1,
                 "action": {
                     "type": "modifyHeaders",
-                    "requestHeaders": requestHeaders
+                    "requestHeaders": Object.keys(data).map(key => ({ header: key, operation: "set", value: data[key] }))
                 },
                 "condition": {
-                    "resourceTypes": ["xmlhttprequest", "media", "image"]
+                    "resourceTypes": ["xmlhttprequest", "media", "image"],
                 }
             }];
             if (tabs) {
                 rules.addRules[0].condition.tabIds = [tabs.id];
+            } else {
+                // initiatorDomains 只支持 chrome 101+ firefox 113+
+                if (G.version < 101 || (G.isFirefox && G.version < 113)) {
+                    callback && callback();
+                    return;
+                }
+                const domain = G.isFirefox
+                    ? new URL(chrome.runtime.getURL("")).hostname
+                    : chrome.runtime.id;
+                rules.addRules[0].condition.initiatorDomains = [domain];
             }
         }
-        // console.log(rules);
         chrome.declarativeNetRequest.updateSessionRules(rules, function () {
             callback && callback();
         });
@@ -113,10 +123,10 @@ function templatesFunction(text, action, data) {
                 return item.trim().replace(/^['"]|['"]$/g, "");
             });
         }
-        // 字符串不允许为空 除非 exists find 函数
-        if (isEmpty(text) && action != "exists" && action != "find") { return "" };
-        // 参数不能为空 除非 filter 函数
-        if (arg.length == 0 && action != "filter") { return text }
+        // 字符串不允许为空 除非 exists find prompt函数
+        if (isEmpty(text) && !["exists", "find", "prompt"].includes(action)) { return "" };
+        // 参数不能为空 除非 filter prompt函数
+        if (arg.length == 0 && !["filter", "prompt"].includes(action)) { return text }
 
         if (action == "slice") {
             text = text.slice(...arg);
@@ -167,6 +177,8 @@ function templatesFunction(text, action, data) {
             }
         } else if (action == "filter") {
             text = stringModify(text, arg[0]);
+        } else if (action == "prompt") {
+            text = window.prompt("", text);
         }
     }
     return text;

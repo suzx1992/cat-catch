@@ -35,7 +35,8 @@ body {
   overflow: hidden;
   margin-right: 0.2rem;
 }
-.panel .url {
+.panel .url,
+.panel .confirm {
   padding: 5px;
 }
 .icon,
@@ -134,6 +135,7 @@ button,
 #down,
 .more {
   display: flex;
+  flex-wrap: wrap;
   position: fixed;
   width: 100%;
   z-index: 999;
@@ -252,4 +254,7 @@ label {
 }
 .moreButton div {
   margin-right: 3px;
+}
+.panel .confirm {
+  text-align: center;
 }

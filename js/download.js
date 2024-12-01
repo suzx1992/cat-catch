@@ -4,7 +4,7 @@ const _url = params.get("url");
 // const _referer = params.get("referer");
 const _initiator = params.get("initiator");
 const _requestHeaders = params.get("requestHeaders");
-const _fileName = params.get("filename");
+// const _fileName = params.get("filename");
 // const autosend = params.get("autosend");
 // const autoClose = params.get("autoClose");
 const downStream = params.get("downStream");
@@ -13,13 +13,41 @@ const title = params.get("title");
 const _ffmpeg = params.get("ffmpeg");
 const _quantity = params.get("quantity");
 const _taskId = params.get("taskId");
+const _requestId = params.get("requestId");
+
+let _data = {};
 
 // 修改当前标签下的所有xhr的Referer
-let requestHeaders = JSONparse(_requestHeaders);
-if (!requestHeaders.referer && _initiator) {
-    requestHeaders.referer = _initiator;
+let requestHeaders = {};
+if (_requestId) {
+    chrome.runtime.sendMessage({ Message: "getData", requestId: _requestId }, function (data) {
+        if (data == "error") {
+            awaitG(start);
+            return;
+        }
+        _data = data = data[0];
+        requestHeaders = data.requestHeaders;
+        if (data.cookie) {
+            requestHeaders.cookie = data.cookie;
+        }
+        if (_requestHeaders) {
+            const parsedHeaders = JSON.parse(_requestHeaders);
+            Object.assign(requestHeaders, parsedHeaders);
+        }
+        if (!requestHeaders.referer && _initiator) {
+            requestHeaders.referer = _initiator;
+        }
+        setRequestHeaders(requestHeaders, () => { awaitG(start); });
+    });
+} else if (_requestHeaders) {
+    requestHeaders = JSON.parse(_requestHeaders);
+    if (!requestHeaders.referer && _initiator) {
+        requestHeaders.referer = _initiator;
+    }
+    setRequestHeaders(requestHeaders, () => { awaitG(start); });
+} else {
+    awaitG(start);
 }
-setRequestHeaders(requestHeaders, () => { awaitG(start); });
 
 function start() {
     $("#autoClose").prop("checked", G.downAutoClose);
@@ -53,7 +81,8 @@ function startDownload(tabId) {
 
     const $downFilepProgress = $("#downFilepProgress");
     const $progress = $(".progress");
-    let blobUrl = "";   // 储存blob
+    let blobUrl = "";   // 储存blobURL
+    let _blob = null;   // 储存blob
     let downId = 0; // 下载的文件ID
 
     // 标题 显示 进度
@@ -76,7 +105,11 @@ function startDownload(tabId) {
 
     // 是否边下边存
     let fileStream = null;
-    const filename = _fileName ? stringModify(_fileName) : getUrlFileName(_url);
+    let filename = getUrlFileName(_url);
+    if (Object.keys(_data).length > 0 && G.TitleName) {
+        _data.title = stringModify(_data.title);    // 防止标题中有路径分隔符 导致下载新建文件夹
+        filename = templates(G.downFileName, _data);
+    }
     if ((downStream || G.downStream) && !_ffmpeg) {
         fileStream = streamSaver.createWriteStream(filename).getWriter();
     }
@@ -148,6 +181,7 @@ function startDownload(tabId) {
             return;
         }
         try {
+            _blob = blob;
             blobUrl = URL.createObjectURL(blob);
             $("#ffmpeg").show();
             // 自动发送到ffmpeg
@@ -189,7 +223,7 @@ function startDownload(tabId) {
     // 监听下载事件 修改提示
     chrome.downloads.onChanged.addListener(function (downloadDelta) {
         if (!downloadDelta.state) { return; }
-        if (downloadDelta.state.current == "complete" && downId != 0) {
+        if (downloadDelta.state.current == "complete" && downId == downloadDelta.id) {
             document.title = i18n.downloadComplete;
             $downFilepProgress.html(i18n.savePrompt);
             if ($("#autoClose").prop("checked")) {
@@ -249,7 +283,7 @@ function startDownload(tabId) {
             const data = {
                 Message: "catCatchFFmpeg",
                 action: action,
-                files: [{ data: blobUrl, name: getUrlFileName(_url) }],
+                files: [{ data: G.isFirefox ? _blob : blobUrl, name: getUrlFileName(_url) }],
                 title: title,
                 tabId: tabId,
                 taskId: _taskId ?? tabId
@@ -270,15 +304,7 @@ function startDownload(tabId) {
             $("#autoClose").prop("checked") && window.close();
         }, Math.ceil(Math.random() * 999));
     });
-    function getUrlFileName() {
-        try {
-            const pathname = new URL(_url).pathname;
-            const fileName = pathname.substring(pathname.lastIndexOf('/') + 1);
-            return fileName ? fileName : 'NULL';
-        } catch (error) {
-            return "NULL";
-        }
-    }
+
     // 刷新/关闭页面 检查边下边存
     window.addEventListener('beforeunload', function (e) {
         if (fileStream) {
